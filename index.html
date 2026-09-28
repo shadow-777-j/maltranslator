@@ -126,7 +126,9 @@
         let rxCharacteristic = null;
         let recognition;
         let isRecording = false;
-        let fullTranscript = "";
+        
+        let finalTranscript = "";
+        let interimTranscript = "";
 
         async function connectBLE() {
             try {
@@ -164,12 +166,16 @@
             recognition.continuous = true;
 
             recognition.onresult = (event) => {
-                let current = "";
-                for (let i = 0; i < event.results.length; i++) {
-                    current += event.results[i][0].transcript;
+                interimTranscript = "";
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript + " ";
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
                 }
-                fullTranscript = current;
-                document.getElementById('mlText').innerText = fullTranscript;
+                const currentDisplay = (finalTranscript + interimTranscript).trim();
+                document.getElementById('mlText').innerText = currentDisplay || "കേൾക്കുന്നു (Listening)...";
             };
 
             recognition.onerror = (e) => {
@@ -177,7 +183,7 @@
             };
 
             recognition.onend = () => {
-                // Keep listening continuously until the user explicitly stops
+                // If user hasn't explicitly pushed stop, resume listening smoothly
                 if (isRecording) {
                     try {
                         recognition.start();
@@ -192,7 +198,8 @@
 
             if (!isRecording) {
                 // START RECORDING
-                fullTranscript = "";
+                finalTranscript = "";
+                interimTranscript = "";
                 document.getElementById('mlText').innerText = "കേൾക്കുന്നു (Listening)...";
 
                 isRecording = true;
@@ -201,23 +208,28 @@
                 status.innerText = "Listening... Speak Malayalam freely.";
                 recognition.start();
             } else {
-                // STOP RECORDING & SEND TO LCD
+                // STOP RECORDING
                 isRecording = false;
                 btn.classList.remove('recording');
                 btn.innerText = "🎤 Push to Speak";
                 recognition.stop();
 
-                if (!fullTranscript.trim()) {
+                const fullText = (finalTranscript + " " + interimTranscript).trim();
+
+                if (!fullText) {
                     status.innerText = "No speech detected. Try again.";
+                    document.getElementById('mlText').innerText = "-";
                     return;
                 }
 
+                // Show only the clean, deduplicated Malayalam text
+                document.getElementById('mlText').innerText = fullText;
                 status.innerText = "Translating & sending to LCD...";
-                
-                // Fetch English translation in the background (hidden from the phone screen)
-                const translatedEn = await translateMLtoEN(fullTranscript);
-                
-                // Transmit straight to LCD
+
+                // Translate to English in background (hidden from the webpage)
+                const translatedEn = await translateMLtoEN(fullText);
+
+                // Send clean English directly to ESP32
                 await sendToLCD(translatedEn);
                 status.innerText = "✨ Sent to LCD!";
             }
