@@ -124,11 +124,9 @@
         const CHAR_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 
         let rxCharacteristic = null;
-        let recognition;
+        let recognition = null;
         let isRecording = false;
-        
-        let finalTranscript = "";
-        let interimTranscript = "";
+        let capturedText = "";
 
         async function connectBLE() {
             try {
@@ -147,49 +145,50 @@
                 document.getElementById('status').innerText = "Connected! Ready to speak.";
                 document.getElementById('btnConnect').style.display = "none";
                 document.getElementById('btnMic').style.display = "block";
-                initSpeech();
             } catch (err) {
                 document.getElementById('status').innerText = "BLE Error: " + err;
             }
         }
 
-        function initSpeech() {
+        function createRecognitionInstance() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
                 alert("Please use Chrome on Android.");
-                return;
+                return null;
             }
 
-            recognition = new SpeechRecognition();
-            recognition.lang = 'ml-IN';
-            recognition.interimResults = true;
-            recognition.continuous = true;
+            const rec = new SpeechRecognition();
+            rec.lang = 'ml-IN';
+            rec.interimResults = true;
+            rec.continuous = false; // Disables Android internal buffer accumulation
 
-            recognition.onresult = (event) => {
-                interimTranscript = "";
-                for (let i = event.resultIndex; i < event.results.length; ++i) {
-                    if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i][0].transcript + " ";
-                    } else {
-                        interimTranscript += event.results[i][0].transcript;
-                    }
+            rec.onresult = (event) => {
+                let latest = "";
+                for (let i = 0; i < event.results.length; ++i) {
+                    latest = event.results[i][0].transcript;
                 }
-                const currentDisplay = (finalTranscript + interimTranscript).trim();
-                document.getElementById('mlText').innerText = currentDisplay || "കേൾക്കുന്നു (Listening)...";
+                if (latest) {
+                    capturedText = latest.trim();
+                    document.getElementById('mlText').innerText = capturedText;
+                }
             };
 
-            recognition.onerror = (e) => {
-                console.error("Speech recognition error:", e);
+            rec.onerror = (e) => {
+                if (e.error !== 'no-speech') {
+                    console.error("Speech error:", e);
+                }
             };
 
-            recognition.onend = () => {
-                // If user hasn't explicitly pushed stop, resume listening smoothly
+            rec.onend = () => {
+                // If user didn't tap stop but browser timed out, restart instance seamlessly
                 if (isRecording) {
                     try {
-                        recognition.start();
+                        rec.start();
                     } catch (e) {}
                 }
             };
+
+            return rec;
         }
 
         async function toggleRecording() {
@@ -198,36 +197,48 @@
 
             if (!isRecording) {
                 // START RECORDING
-                finalTranscript = "";
-                interimTranscript = "";
+                capturedText = "";
                 document.getElementById('mlText').innerText = "കേൾക്കുന്നു (Listening)...";
 
                 isRecording = true;
                 btn.classList.add('recording');
                 btn.innerText = "🛑 Stop & Send to LCD";
                 status.innerText = "Listening... Speak Malayalam freely.";
-                recognition.start();
+
+                if (!recognition) {
+                    recognition = createRecognitionInstance();
+                }
+                try {
+                    recognition.start();
+                } catch (e) {
+                    recognition = createRecognitionInstance();
+                    recognition.start();
+                }
             } else {
                 // STOP RECORDING
                 isRecording = false;
                 btn.classList.remove('recording');
                 btn.innerText = "🎤 Push to Speak";
-                recognition.stop();
 
-                const fullText = (finalTranscript + " " + interimTranscript).trim();
+                if (recognition) {
+                    recognition.onresult = null; // Prevent trailing events from re-appending
+                    recognition.onend = null;
+                    recognition.stop();
+                    recognition = null;
+                }
 
-                if (!fullText) {
+                const cleaned = capturedText.trim();
+                if (!cleaned) {
                     status.innerText = "No speech detected. Try again.";
                     document.getElementById('mlText').innerText = "-";
                     return;
                 }
 
-                // Show only the clean, deduplicated Malayalam text
-                document.getElementById('mlText').innerText = fullText;
+                document.getElementById('mlText').innerText = cleaned;
                 status.innerText = "Translating & sending to LCD...";
 
-                // Translate to English in background (hidden from the webpage)
-                const translatedEn = await translateMLtoEN(fullText);
+                // Translate to English in background
+                const translatedEn = await translateMLtoEN(cleaned);
 
                 // Send clean English directly to ESP32
                 await sendToLCD(translatedEn);
