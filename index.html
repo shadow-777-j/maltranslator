@@ -4,40 +4,52 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Direct Voice Translator to LCD</title>
+    <title>Malayalam Voice to LCD</title>
     <style>
         body {
             font-family: sans-serif;
-            background: #0f172a;
+            background: #0d131f;
             color: #fff;
             text-align: center;
             padding: 20px;
             margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 90vh;
         }
 
         .card {
-            background: #1e293b;
-            max-width: 400px;
-            margin: 20px auto;
-            padding: 25px;
-            border-radius: 16px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+            background: #192231;
+            width: 100%;
+            max-width: 380px;
+            padding: 24px;
+            border-radius: 18px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            box-sizing: border-box;
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 20px;
+            margin-bottom: 20px;
+            letter-spacing: 0.5px;
         }
 
         button {
             width: 100%;
             padding: 16px;
-            font-size: 17px;
+            font-size: 16px;
             font-weight: bold;
             border-radius: 12px;
             border: none;
             margin: 10px 0;
             cursor: pointer;
-            transition: 0.2s;
+            transition: all 0.2s ease;
         }
 
         #btnConnect {
-            background: #3b82f6;
+            background: #2563eb;
             color: white;
         }
 
@@ -47,29 +59,46 @@
             display: none;
         }
 
-        #btnMic.listening {
+        #btnMic.recording {
             background: #ef4444;
+            animation: pulse 1.4s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.85; transform: scale(0.98); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        #status {
+            color: #94a3b8;
+            font-size: 13px;
+            margin: 12px 0;
+            min-height: 18px;
         }
 
         .display-box {
-            background: #334155;
-            padding: 12px;
-            border-radius: 8px;
-            margin-top: 12px;
+            background: #232f42;
+            padding: 14px;
+            border-radius: 10px;
             text-align: left;
+            margin-top: 10px;
         }
 
         .label {
-            font-size: 12px;
-            color: #94a3b8;
+            font-size: 11px;
+            color: #8da2be;
             text-transform: uppercase;
             font-weight: bold;
+            letter-spacing: 0.5px;
         }
 
         .val {
-            font-size: 18px;
-            margin-top: 4px;
-            min-height: 25px;
+            font-size: 17px;
+            margin-top: 6px;
+            min-height: 24px;
+            color: #e2e8f0;
+            word-wrap: break-word;
         }
     </style>
 </head>
@@ -80,18 +109,13 @@
         <h2>Malayalam ➔ LCD</h2>
 
         <button id="btnConnect" onclick="connectBLE()">1. Connect to ESP32</button>
-        <button id="btnMic" onclick="startListening()">🎤 2. Speak Malayalam</button>
+        <button id="btnMic" onclick="toggleRecording()">🎤 Push to Speak</button>
 
-        <div id="status" style="color: #94a3b8; font-size: 14px; margin-top: 8px;">Tap Connect to begin</div>
+        <div id="status">Tap Connect to begin</div>
 
         <div class="display-box">
             <div class="label">Spoken (Malayalam):</div>
             <div id="mlText" class="val">-</div>
-        </div>
-
-        <div class="display-box">
-            <div class="label">Sent to LCD (English):</div>
-            <div id="enText" class="val" style="color: #38bdf8;">-</div>
         </div>
     </div>
 
@@ -101,12 +125,13 @@
 
         let rxCharacteristic = null;
         let recognition;
+        let isRecording = false;
+        let fullTranscript = "";
 
         async function connectBLE() {
             try {
                 document.getElementById('status').innerText = "Scanning for ESP32...";
 
-                // Match by service UUID so Chrome bypasses legacy name filter bugs
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ services: [SERVICE_UUID] }]
                 });
@@ -117,7 +142,7 @@
                 const service = await server.getPrimaryService(SERVICE_UUID);
                 rxCharacteristic = await service.getCharacteristic(CHAR_RX_UUID);
 
-                document.getElementById('status').innerText = "Connected to ESP32!";
+                document.getElementById('status').innerText = "Connected! Ready to speak.";
                 document.getElementById('btnConnect').style.display = "none";
                 document.getElementById('btnMic').style.display = "block";
                 initSpeech();
@@ -129,46 +154,73 @@
         function initSpeech() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
-                alert("Please open this in Chrome on Android.");
+                alert("Please use Chrome on Android.");
                 return;
             }
 
             recognition = new SpeechRecognition();
             recognition.lang = 'ml-IN';
-            recognition.interimResults = false;
-            recognition.continuous = false;
+            recognition.interimResults = true;
+            recognition.continuous = true;
 
-            recognition.onstart = () => {
-                document.getElementById('btnMic').classList.add('listening');
-                document.getElementById('btnMic').innerText = "🛑 കേൾക്കുന്നു (Listening)...";
-                document.getElementById('status').innerText = "Speak now in Malayalam...";
-            };
-
-            recognition.onend = () => {
-                document.getElementById('btnMic').classList.remove('listening');
-                document.getElementById('btnMic').innerText = "🎤 Speak Again";
-            };
-
-            recognition.onresult = async (event) => {
-                const spokenMl = event.results[0][0].transcript;
-                document.getElementById('mlText').innerText = spokenMl;
-                document.getElementById('status').innerText = "Translating & sending to LCD...";
-
-                // Free translation API call (Malayalam -> English)
-                const translatedEn = await translateMLtoEN(spokenMl);
-                document.getElementById('enText').innerText = translatedEn;
-
-                // Send the translated English text straight to ESP32
-                sendToLCD(translatedEn);
+            recognition.onresult = (event) => {
+                let current = "";
+                for (let i = 0; i < event.results.length; i++) {
+                    current += event.results[i][0].transcript;
+                }
+                fullTranscript = current;
+                document.getElementById('mlText').innerText = fullTranscript;
             };
 
             recognition.onerror = (e) => {
-                document.getElementById('status').innerText = "Speech Error: " + e.error;
+                console.error("Speech recognition error:", e);
+            };
+
+            recognition.onend = () => {
+                // Keep listening continuously until the user explicitly stops
+                if (isRecording) {
+                    try {
+                        recognition.start();
+                    } catch (e) {}
+                }
             };
         }
 
-        function startListening() {
-            if (recognition) recognition.start();
+        async function toggleRecording() {
+            const btn = document.getElementById('btnMic');
+            const status = document.getElementById('status');
+
+            if (!isRecording) {
+                // START RECORDING
+                fullTranscript = "";
+                document.getElementById('mlText').innerText = "കേൾക്കുന്നു (Listening)...";
+
+                isRecording = true;
+                btn.classList.add('recording');
+                btn.innerText = "🛑 Stop & Send to LCD";
+                status.innerText = "Listening... Speak Malayalam freely.";
+                recognition.start();
+            } else {
+                // STOP RECORDING & SEND TO LCD
+                isRecording = false;
+                btn.classList.remove('recording');
+                btn.innerText = "🎤 Push to Speak";
+                recognition.stop();
+
+                if (!fullTranscript.trim()) {
+                    status.innerText = "No speech detected. Try again.";
+                    return;
+                }
+
+                status.innerText = "Translating & sending to LCD...";
+                
+                // Fetch English translation in the background (hidden from the phone screen)
+                const translatedEn = await translateMLtoEN(fullTranscript);
+                
+                // Transmit straight to LCD
+                await sendToLCD(translatedEn);
+                status.innerText = "✨ Sent to LCD!";
+            }
         }
 
         async function translateMLtoEN(text) {
@@ -185,7 +237,6 @@
             if (!rxCharacteristic) return;
             const encoder = new TextEncoder();
             await rxCharacteristic.writeValue(encoder.encode(text));
-            document.getElementById('status').innerText = "Sent to LCD!";
         }
     </script>
 </body>
