@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Direct Voice Translator to LCD</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background: #0f172a;
+            color: #fff;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .card {
+            background: #1e293b;
+            max-width: 400px;
+            margin: 20px auto;
+            padding: 25px;
+            border-radius: 16px;
+        }
+
+        button {
+            width: 100%;
+            padding: 16px;
+            font-size: 17px;
+            font-weight: bold;
+            border-radius: 12px;
+            border: none;
+            margin: 10px 0;
+            cursor: pointer;
+        }
+
+        #btnConnect {
+            background: #3b82f6;
+            color: white;
+        }
+
+        #btnMic {
+            background: #10b981;
+            color: white;
+            display: none;
+        }
+
+        #btnMic.listening {
+            background: #ef4444;
+        }
+
+        .display-box {
+            background: #334155;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 12px;
+            text-align: left;
+        }
+
+        .label {
+            font-size: 12px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+
+        .val {
+            font-size: 18px;
+            margin-top: 4px;
+            min-height: 25px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="card">
+        <h2>Malayalam ➔ LCD</h2>
+
+        <button id="btnConnect" onclick="connectBLE()">1. Connect to ESP32</button>
+        <button id="btnMic" onclick="startListening()">🎤 2. Speak Malayalam</button>
+
+        <div id="status" style="color: #94a3b8; font-size: 14px; margin-top: 8px;">Tap Connect to begin</div>
+
+        <div class="display-box">
+            <div class="label">Spoken (Malayalam):</div>
+            <div id="mlText" class="val">-</div>
+        </div>
+
+        <div class="display-box">
+            <div class="label">Sent to LCD (English):</div>
+            <div id="enText" class="val" style="color: #38bdf8;">-</div>
+        </div>
+    </div>
+
+    <script>
+        const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+        const CHAR_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+
+        let rxCharacteristic = null;
+        let recognition;
+
+        async function connectBLE() {
+            try {
+                document.getElementById('status').innerText = "Connecting to ESP32...";
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: "ESP32_AutoTranslator" }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                rxCharacteristic = await service.getCharacteristic(CHAR_RX_UUID);
+
+                document.getElementById('status').innerText = "Connected to ESP32!";
+                document.getElementById('btnConnect').style.display = "none";
+                document.getElementById('btnMic').style.display = "block";
+                initSpeech();
+            } catch (err) {
+                document.getElementById('status').innerText = "BLE Error: " + err;
+            }
+        }
+
+        function initSpeech() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                alert("Please open this in Chrome on Android.");
+                return;
+            }
+
+            recognition = new SpeechRecognition();
+            recognition.lang = 'ml-IN';
+            recognition.interimResults = false;
+            recognition.continuous = false;
+
+            recognition.onstart = () => {
+                document.getElementById('btnMic').classList.add('listening');
+                document.getElementById('btnMic').innerText = "🛑 കേൾക്കുന്നു (Listening)...";
+                document.getElementById('status').innerText = "Speak now in Malayalam...";
+            };
+
+            recognition.onend = () => {
+                document.getElementById('btnMic').classList.remove('listening');
+                document.getElementById('btnMic').innerText = "🎤 Speak Again";
+            };
+
+            recognition.onresult = async (event) => {
+                const spokenMl = event.results[0][0].transcript;
+                document.getElementById('mlText').innerText = spokenMl;
+                document.getElementById('status').innerText = "Translating & sending to LCD...";
+
+                // Translate via MyMemory API
+                const translatedEn = await translateMLtoEN(spokenMl);
+                document.getElementById('enText').innerText = translatedEn;
+
+                // Transmit directly to ESP32 LCD over BLE
+                sendToLCD(translatedEn);
+            };
+
+            recognition.onerror = (e) => {
+                document.getElementById('status').innerText = "Speech Error: " + e.error;
+            };
+        }
+
+        function startListening() {
+            if (recognition) recognition.start();
+        }
+
+        async function translateMLtoEN(text) {
+            try {
+                const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ml|en`);
+                const data = await res.json();
+                return data.responseData.translatedText || "Translation err";
+            } catch (e) {
+                return "Network err";
+            }
+        }
+
+        async function sendToLCD(text) {
+            if (!rxCharacteristic) return;
+            const encoder = new TextEncoder();
+            await rxCharacteristic.writeValue(encoder.encode(text));
+            document.getElementById('status').innerText = "Sent to LCD!";
+        }
+    </script>
+</body>
+
+</html>
